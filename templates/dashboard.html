@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AI Disaster Predictor Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+<style>
+  body { background: linear-gradient(to bottom right,#0f172a,#0ea5e9); color:#fff; font-family:Inter,sans-serif; }
+  .card { background: rgba(255,255,255,0.06); border-radius:12px; padding:16px; box-shadow:0 6px 18px rgba(2,6,23,0.35); transition:all 0.3s; }
+  .pulse-marker { width:22px;height:22px;border-radius:50%;box-shadow:0 0 18px var(--pulse-color,#ff4d4f);background:var(--pulse-color,#ff4d4f);animation:pulse 2s infinite ease-out;border:2px solid rgba(255,255,255,0.9); }
+  @keyframes pulse { 0% { transform: scale(1); opacity:1; } 50% { transform: scale(1.8); opacity:0.5; } 100% { transform: scale(1); opacity:1; } }
+  #forecastCards { display:flex; gap:6px; overflow-x:auto; padding-top:6px; }
+  .forecast-card { background: rgba(255,255,255,0.08); padding:8px; border-radius:8px; text-align:center; min-width:80px; }
+</style>
+</head>
+<body>
+<header class="flex justify-between items-center px-6 py-4 bg-gradient-to-r from-blue-600 to-blue-400 rounded-b-xl shadow-lg">
+  <div class="flex items-center gap-4">
+    <img src="{{ url_for('static', filename='images/logo.jpg') }}" alt="Logo" class="w-14 h-14 rounded-full shadow-lg">
+    <h1 class="text-2xl font-bold text-white">AI Disaster Predictor</h1>
+  </div>
+  <div class="flex items-center gap-4">
+    <span class="text-white font-medium">Welcome, {{ user or "Guest" }}</span>
+    <a href="/logout" class="px-3 py-1 bg-white/20 rounded hover:bg-white/40 text-white font-semibold">Logout</a>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-6 py-6 space-y-6">
+  <!-- Search / Predict -->
+  <div class="card flex flex-col md:flex-row items-center gap-4">
+    <input id="cityInput" class="flex-1 p-3 rounded-md text-black" placeholder="Enter city name" />
+    <button onclick="onPredict()" class="bg-blue-600 px-4 py-2 rounded-md font-semibold text-white hover:bg-blue-700">Predict</button>
+  </div>
+
+  <!-- Risk Cards -->
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <div id="floodCard" class="card text-center p-6">
+      <h3 class="text-xl font-bold mb-3">🌊 Flood Risk</h3>
+      <div id="floodProb" class="text-4xl font-extrabold mb-2">-</div>
+      <div id="floodRisk" class="text-lg font-semibold mb-4">-</div>
+      <div class="w-full bg-white/20 rounded-full h-4">
+        <div id="floodBar" class="h-4 rounded-full" style="width:0%;background-color:#34D399;"></div>
+      </div>
+    </div>
+
+    <div id="cycloneCard" class="card text-center p-6">
+      <h3 class="text-xl font-bold mb-3">🌪️ Cyclone Risk</h3>
+      <div id="cycloneProb" class="text-4xl font-extrabold mb-2">-</div>
+      <div id="cycloneRisk" class="text-lg font-semibold mb-4">-</div>
+      <div class="w-full bg-white/20 rounded-full h-4">
+        <div id="cycloneBar" class="h-4 rounded-full" style="width:0%;background-color:#34D399;"></div>
+      </div>
+    </div>
+
+    <div id="weatherCard" class="card p-6">
+      <h3 class="text-xl font-bold mb-3">🌤️ Weather Details</h3>
+      <div id="weatherInfo" class="text-white/90 space-y-1">
+        <div>Temperature: - °C</div>
+        <div>Humidity: - %</div>
+        <div>Pressure: - hPa</div>
+        <div>Rainfall: - mm</div>
+        <div>Wind Speed: - m/s</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Map -->
+  <div class="card">
+    <div id="map" style="height:550px; border-radius:10px;"></div>
+  </div>
+
+  <!-- Forecast & Reports -->
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Forecast -->
+    <div class="card">
+      <h3 class="font-semibold mb-2">🌤️ 5-Day Forecast</h3>
+      <div id="forecastCards"></div>
+    </div>
+
+    <!-- Safety Tips -->
+    <div class="card">
+      <h3 class="font-semibold mb-2">📘 Safety Tips</h3>
+      <div id="riskDetails" class="space-y-3">
+        <div id="floodDetail">No data yet</div>
+        <div id="cycloneDetail">No data yet</div>
+      </div>
+    </div>
+
+    <!-- Submit Report -->
+    <div class="card">
+      <h3 class="font-semibold mb-2">📝 Submit Disaster Report</h3>
+      <input id="reportCity" class="p-2 rounded-md text-black mb-2" placeholder="City Name"/>
+      <select id="reportType" class="p-2 rounded-md text-black mb-2">
+        <option value="Flood">Flood</option>
+        <option value="Cyclone">Cyclone</option>
+        <option value="Other">Other</option>
+      </select>
+      <textarea id="reportDesc" class="p-2 rounded-md text-black mb-2" placeholder="Describe the situation..."></textarea>
+      <button onclick="submitReport()" class="px-4 py-2 bg-blue-600 rounded-md text-white hover:bg-blue-700">Submit</button>
+      <div id="reportMsg" class="text-sm mt-2"></div>
+    </div>
+  </div>
+</main>
+<section class="card p-6 rounded-xl shadow-xl bg-gray-800 border border-gray-700">
+  <div class="flex items-center justify-between mb-4">
+    <h3 class="text-2xl font-bold text-white flex items-center gap-2">
+      <svg class="w-8 h-8 text-red-500 animate-pulse" fill="currentColor" viewBox="0 0 20 20">
+        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-11.75a.75.75 0 00-1.5 0v4a.75.75 0 001.5 0v-4zm-.75 7a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/>
+      </svg>
+      Emergency Alerts
+    </h3>
+    <span class="text-sm text-gray-400 italic">Auto-updated every 30s</span>
+  </div>
+
+  <div id="alertsContainer" class="space-y-3 max-h-72 overflow-y-auto">
+    <p class="text-gray-400">Loading alerts...</p>
+  </div>
+</section>
+
+
+
+<script>
+const PULSE_COLORS={low:"#34D399",medium:"#FBBF24",high:"#EF4444"};
+let map,currentMarker,pulseLayer;
+
+function initMap(){
+  const osm=L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19});
+  map=L.map("map",{center:[20.5937,78.9629],zoom:5,layers:[osm]});
+}
+
+function makePulseIcon(color){
+  return L.divIcon({className:'',html:`<div style="--pulse-color:${color}" class="pulse-marker"></div>`,iconSize:[28,28],iconAnchor:[14,14]});
+}
+
+function animateTo(lat,lon,flood_prob,cyclone_prob,city){
+  const severity=(flood_prob>=0.7||cyclone_prob>=0.7)?"high":(flood_prob>=0.4||cyclone_prob>=0.4)?"medium":"low";
+  const color=PULSE_COLORS[severity];
+  map.flyTo([lat,lon],6,{duration:2.4});
+  if(currentMarker) map.removeLayer(currentMarker);
+  if(pulseLayer) map.removeLayer(pulseLayer);
+  currentMarker=L.marker([lat,lon],{icon:makePulseIcon(color)}).addTo(map)
+    .bindPopup(`<b>${city}</b><br>Flood: ${(flood_prob*100).toFixed(1)}%<br>Cyclone: ${(cyclone_prob*100).toFixed(1)}%`).openPopup();
+  pulseLayer=L.circle([lat,lon],{color,fillColor:color,fillOpacity:0.14,radius:Math.max(20000,(Math.max(flood_prob,cyclone_prob)*60000))}).addTo(map);
+}
+
+function updateRiskCards(flood_prob, cyclone_prob, flood_level, cyclone_level){
+  const riskColors={Low:"#34D399", Medium:"#FBBF24", High:"#EF4444"};
+  document.getElementById("floodProb").innerText=(flood_prob*100).toFixed(1)+"%";
+  document.getElementById("floodRisk").innerText=flood_level;
+  document.getElementById("floodBar").style.width=(flood_prob*100)+"%";
+  document.getElementById("floodBar").style.backgroundColor=riskColors[flood_level];
+
+  document.getElementById("cycloneProb").innerText=(cyclone_prob*100).toFixed(1)+"%";
+  document.getElementById("cycloneRisk").innerText=cyclone_level;
+  document.getElementById("cycloneBar").style.width=(cyclone_prob*100)+"%";
+  document.getElementById("cycloneBar").style.backgroundColor=riskColors[cyclone_level];
+}
+
+async function onPredict(){
+  const city=document.getElementById("cityInput").value.trim();
+  if(!city) return;
+  try{
+    const res=await axios.post("/predict",{city});
+    const data=res.data;
+    animateTo(data.weather.lat,data.weather.lon,data.flood_prob,data.cyclone_prob,data.city);
+    updateRiskCards(data.flood_prob,data.cyclone_prob,data.flood_risk,data.cyclone_risk);
+    const rainfall = (data.weather.rainfall != null && data.weather.rainfall > 0)
+                 ? data.weather.rainfall.toFixed(1) + ' mm'
+                 : '0 mm';
+
+document.getElementById("weatherInfo").innerHTML =
+  `Temperature: ${data.weather.temp ?? '-'} °C<br>
+   Humidity: ${data.weather.humidity ?? '-'}%<br>
+   Pressure: ${data.weather.pressure ?? '-'} hPa<br>
+   Rainfall: ${rainfall}<br>
+   Wind Speed: ${data.weather.wind_speed ?? '-'} m/s`;
+
+    document.getElementById("floodDetail").innerHTML=`<b>Flood</b><br>Rainfall: ${data.weather.rainfall || '-'} mm<br>Advice: ${data.flood_risk==='High'?'Evacuate if instructed.':'Be cautious in low areas.'}`;
+    document.getElementById("cycloneDetail").innerHTML=`<b>Cyclone</b><br>Pressure: ${data.weather.pressure || '-'} hPa<br>Advice: ${data.cyclone_risk==='High'?'Follow shelter orders.':'Stay alert.'}`;
+    loadForecast(city);
+  }catch(err){ console.error(err); }
+}
+
+async function loadForecast(city) {
+  try {
+    const res = await axios.get(`/get_5day_forecast?city=${city}`);
+    const forecastDiv = document.getElementById("forecastCards");
+    forecastDiv.innerHTML = '';
+    const dailyForecast = {};
+    res.data.forEach(f => { const date=f.datetime.split(' ')[0]; if(!dailyForecast[date]) dailyForecast[date]=f; });
+    Object.keys(dailyForecast).slice(0,5).forEach(date => {
+      const f = dailyForecast[date];
+      let icon='🌤️';
+      const w=f.weather.toLowerCase();
+      if(w.includes('rain')) icon='🌧️'; else if(w.includes('cloud')) icon='☁️';
+      else if(w.includes('storm')) icon='⛈️'; else if(w.includes('snow')) icon='❄️';
+      const card=document.createElement('div');
+      card.className='forecast-card';
+      card.innerHTML=`<div class="font-semibold">${date}</div>
+                      <div class="text-3xl my-1">${icon}</div>
+                      <div>${f.temp ? f.temp.toFixed(1) : '-' }°C</div>
+                      <div class="text-sm text-white/80">${f.weather || '-'}</div>`;
+      forecastDiv.appendChild(card);
+    });
+  } catch(err) { console.error(err); }
+}
+
+async function submitReport(){
+  const city=document.getElementById("reportCity").value.trim();
+  const type=document.getElementById("reportType").value;
+  const desc=document.getElementById("reportDesc").value.trim();
+  if(!city||!desc) return;
+  try{
+    const res=await axios.post("/submit_report",{city,report_type:type,description:desc});
+    document.getElementById("reportMsg").innerText=res.data.message;
+    document.getElementById("reportCity").value='';
+    document.getElementById("reportDesc").value='';
+  }catch(err){ console.error(err); }
+}
+
+// Emergency Alerts
+async function loadUserAlerts(){
+  try{
+    const res=await axios.get('/user_alerts');
+    const container=document.getElementById('alertsContainer');
+    container.innerHTML='';
+    if(!res.data || res.data.length===0){ container.innerHTML='<p>No alerts currently.</p>'; return; }
+    res.data.forEach(alert=>{
+      const div=document.createElement('div');
+      div.className='p-2 bg-red-600/20 rounded';
+      div.innerHTML=`<b>${alert.title || '-'}</b><br>${alert.message || '-'}<br><span class="text-sm text-white/60">${alert.timestamp || '-'}</span>`;
+      container.appendChild(div);
+    });
+  }catch(err){ console.error(err); }
+}
+
+document.addEventListener('DOMContentLoaded',()=>{
+  initMap();
+  loadUserAlerts();
+  setInterval(loadUserAlerts,30000);
+});
+</script>
+</body>
+</html>

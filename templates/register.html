@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Register — AI Disaster Predictor</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body class="bg-gradient-to-br from-blue-700 to-blue-400 min-h-screen flex items-center justify-center">
+
+<div class="w-full max-w-md p-8 bg-white/10 rounded-xl shadow-lg text-white">
+  <!-- Logo -->
+  <div class="flex justify-center mb-6">
+    <img src="{{ url_for('static', filename='images/logo..jpg') }}" alt="Logo" class="w-20 h-20 rounded-full shadow-lg">
+  </div>
+
+  <h2 class="text-2xl font-bold text-center mb-4">Register for AI Disaster Predictor</h2>
+
+  {% if error %}
+  <div class="text-red-500 text-sm mb-4">{{ error }}</div>
+  {% endif %}
+
+  <form method="POST" class="space-y-4">
+    <input type="text" name="name" placeholder="Full Name" class="w-full p-3 rounded-md text-black" required>
+    <input type="email" name="email" placeholder="Email" class="w-full p-3 rounded-md text-black" required>
+    <input type="password" name="password" placeholder="Password" class="w-full p-3 rounded-md text-black" required>
+    <button type="submit" class="w-full p-3 bg-gradient-to-r from-cyan-400 to-blue-600 rounded-md font-semibold shadow-lg">Register</button>
+  </form>
+
+  <p class="mt-4 text-center text-sm text-white/80">
+    Already have an account? <a href="{{ url_for('login_page') }}" class="underline hover:text-white">Login</a>
+  </p>
+</div>
+</body>
+</html>

@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Admin Dashboard — AI Disaster Predictor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+</head>
+<body class="bg-gray-900 min-h-screen p-6 text-white">
+
+<!-- ===== HEADER ===== -->
+<header class="flex justify-between items-center mb-6 bg-blue-800 p-4 rounded shadow">
+  <h1 class="text-3xl font-bold">🌐 Admin Dashboard</h1>
+  <a href="/logout" class="px-4 py-2 bg-red-600 rounded hover:bg-red-700">Logout</a>
+</header>
+
+<!-- ===== USERS TABLE ===== -->
+<section class="mb-8">
+  <h2 class="text-xl font-semibold mb-2">👥 Registered Users (Total: {{ total_users }})</h2>
+  <table class="min-w-full bg-gray-800 rounded shadow text-left">
+    <thead>
+      <tr class="bg-blue-700 text-white">
+        <th class="p-2 w-1/6">ID</th>
+        <th class="p-2 w-1/6">Name</th>
+        <th class="p-2 w-2/6">Email</th>
+        <th class="p-2 w-1/6 text-center">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for user in users %}
+      <tr class="border-b border-gray-700 hover:bg-gray-700">
+        <td class="p-2">{{ user[0] }}</td>
+        <td class="p-2">{{ user[1] }}</td>
+        <td class="p-2">{{ user[2] }}</td>
+        <td class="p-2 text-center">
+          {% if user[2] != 'admin@example.com' %}
+          <button onclick="deleteUser('{{ user[0] }}')" class="px-2 py-1 bg-red-600 rounded hover:bg-red-700">Delete</button>
+          {% else %}
+          <span class="text-gray-400">Admin</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="text-center p-3 text-gray-400">No users found</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<!-- ===== DISASTER REPORTS ===== -->
+<section class="mb-8">
+  <h2 class="text-xl font-semibold mb-2">📋 Disaster Reports</h2>
+  <table class="min-w-full bg-gray-800 rounded shadow text-left">
+    <thead>
+      <tr class="bg-blue-700 text-white">
+        <th class="p-2 w-1/6">User</th>
+        <th class="p-2 w-1/6">City</th>
+        <th class="p-2 w-1/6">Type</th>
+        <th class="p-2 w-2/6">Description</th>
+        <th class="p-2 w-1/6">Submitted At</th>
+        <th class="p-2 w-1/6 text-center">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for report in reports %}
+      <tr class="border-b border-gray-700 hover:bg-gray-700">
+        <td class="p-2">{{ report[1] }}</td>
+        <td class="p-2">{{ report[2] }}</td>
+        <td class="p-2">{{ report[3] }}</td>
+        <td class="p-2">{{ report[4] }}</td>
+        <td class="p-2">{{ report[5] }}</td>
+        <td class="p-2 text-center">
+          <button onclick="deleteReport('{{ report[0] }}')" class="px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700">Delete</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="text-center p-3 text-gray-400">No reports found</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<!-- ===== EMERGENCY ALERTS ===== -->
+<section>
+  <h2 class="text-xl font-semibold mb-2">🔔 Emergency Alerts</h2>
+
+  <!-- Alert Creation Inputs -->
+  <div class="mb-4 flex gap-2">
+    <input id="alertTitle" type="text" placeholder="Alert Title" class="p-2 rounded border text-gray-900 flex-1">
+    <input id="alertMessage" type="text" placeholder="Alert Message" class="p-2 rounded border text-gray-900 flex-1">
+    <button onclick="createAlert()" class="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600">Send Alert</button>
+  </div>
+
+  <!-- Alerts Table -->
+  <table class="min-w-full bg-gray-800 rounded shadow text-left">
+    <thead>
+      <tr class="bg-blue-700 text-white">
+        <th class="p-2 w-1/6">Title</th>
+        <th class="p-2 w-3/6">Message</th>
+        <th class="p-2 w-1/6">Timestamp</th>
+        <th class="p-2 w-1/6 text-center">Actions</th>
+      </tr>
+    </thead>
+    <tbody id="alertsTable">
+      {% for alert in alerts %}
+      <tr class="border-b border-gray-700 hover:bg-gray-700" id="alertRow{{ alert[0] }}">
+        <td class="p-2">{{ alert[1] }}</td>
+        <td class="p-2">{{ alert[2] }}</td>
+        <td class="p-2">{{ alert[3] }}</td>
+        <td class="p-2 text-center">
+          <button onclick="deleteAlert('{{ alert[0] }}')" class="px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700">Delete</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="text-center p-3 text-gray-400">No alerts found</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<!-- ===== JAVASCRIPT FUNCTIONS ===== -->
+<script>
+async function deleteUser(id) {
+  if (confirm("Are you sure to delete this user?")) {
+    await axios.delete(`/delete_user/${id}`);
+    location.reload();
+  }
+}
+
+async function deleteReport(id) {
+  if (confirm("Are you sure to delete this report?")) {
+    await axios.delete(`/delete_report/${id}`);
+    location.reload();
+  }
+}
+
+async function deleteAlert(id) {
+  if (confirm("Are you sure to delete this alert?")) {
+    await axios.delete(`/delete_alert/${id}`);
+    document.getElementById(`alertRow${id}`).remove();
+  }
+}
+
+async function createAlert() {
+  const title = document.getElementById('alertTitle').value.trim();
+  const message = document.getElementById('alertMessage').value.trim();
+  if (!title || !message) {
+    alert("Title and Message cannot be empty");
+    return;
+  }
+  await axios.post('/create_alert', { title, message });
+  document.getElementById('alertTitle').value = '';
+  document.getElementById('alertMessage').value = '';
+  location.reload();
+}
+</script>
+
+</body>
+</html>
