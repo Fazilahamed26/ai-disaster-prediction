@@ -1,7 +1,10 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session
-import joblib, requests, sqlite3, os
+import joblib, requests, os
 from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
+from datetime import datetime
+from pymongo import MongoClient, DESCENDING, ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 # -----------------------------
 # App Setup
@@ -10,64 +13,61 @@ app = Flask(__name__)
 load_dotenv()
 app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
 bcrypt = Bcrypt(app)
-DB = "users.db"
+MONGODB_URI = os.getenv("MONGODB_URI")
+if not MONGODB_URI:
+    raise RuntimeError("MONGODB_URI must be set to connect to MongoDB Atlas")
+mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+db = mongo_client["users"]
+users_collection = db["users"]
+reports_collection = db["reports"]
+alerts_collection = db["alerts"]
+counters_collection = db["counters"]
 API_KEY = os.getenv("OPENWEATHER_API_KEY", "demo_api_key")  # fallback
 
 # -----------------------------
 # Database Initialization
 # -----------------------------
 def init_db():
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    # Users table
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            email TEXT UNIQUE,
-            password TEXT
+    mongo_client.admin.command("ping")
+    users_collection.create_index(
+        "email",
+        unique=True,
+        partialFilterExpression={"email": {"$type": "string"}},
+    )
+    for collection_name, collection in (
+        ("users", users_collection),
+        ("reports", reports_collection),
+        ("alerts", alerts_collection),
+    ):
+        latest = collection.find_one(
+            {"_id": {"$type": "number"}}, sort=[("_id", DESCENDING)]
         )
-    """)
-
-    # Reports table with user_id
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS reports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            city TEXT,
-            report_type TEXT,
-            description TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id)
+        counters_collection.update_one(
+            {"_id": collection_name},
+            {"$max": {"sequence": latest["_id"] if latest else 0}},
+            upsert=True,
         )
-    """)
-
-    # Alerts table
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS alerts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT,
-            message TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    conn.commit()
-    conn.close()
     create_admin_if_not_exists()
 
+def next_id(collection_name):
+    counter = counters_collection.find_one_and_update(
+        {"_id": collection_name},
+        {"$inc": {"sequence": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    return counter["sequence"]
+
 def create_admin_if_not_exists():
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE email=?", ("admin@example.com",))
-    if not c.fetchone():
+    if not users_collection.find_one({"email": "admin@example.com"}):
         password_hash = bcrypt.generate_password_hash("admin123").decode("utf-8")
-        c.execute("INSERT INTO users (name, email, password) VALUES (?, ?, ?)",
-                  ("admin", "admin@example.com", password_hash))
-        conn.commit()
+        users_collection.insert_one({
+            "_id": next_id("users"),
+            "name": "admin",
+            "email": "admin@example.com",
+            "password": password_hash,
+        })
         print("✅ Admin account created: admin@example.com / admin123")
-    conn.close()
 
 init_db()
 
@@ -144,15 +144,11 @@ def login_page():
     if request.method == 'POST':
         email = request.form['email'].strip()
         password = request.form['password']
-        conn = sqlite3.connect(DB)
-        c = conn.cursor()
-        c.execute("SELECT * FROM users WHERE email=?", (email,))
-        user = c.fetchone()
-        conn.close()
-        if user and bcrypt.check_password_hash(user[3], password):
-            session['user'] = user[1]
-            session['email'] = user[2]
-            session['user_id'] = user[0]
+        user = users_collection.find_one({"email": email})
+        if user and bcrypt.check_password_hash(user["password"], password):
+            session['user'] = user["name"]
+            session['email'] = user["email"]
+            session['user_id'] = user["_id"]
             if email == "admin@example.com":
                 return redirect(url_for('admin_page'))
             return redirect(url_for('dashboard_page'))
@@ -165,15 +161,15 @@ def register_page():
         name = request.form['name'].strip()
         email = request.form['email'].strip()
         password = bcrypt.generate_password_hash(request.form['password']).decode('utf-8')
-        conn = sqlite3.connect(DB)
-        c = conn.cursor()
         try:
-            c.execute("INSERT INTO users (name, email, password) VALUES (?,?,?)", (name, email, password))
-            conn.commit()
-        except Exception:
-            conn.close()
+            users_collection.insert_one({
+                "_id": next_id("users"),
+                "name": name,
+                "email": email,
+                "password": password,
+            })
+        except DuplicateKeyError:
             return render_template('register.html', error="Email already registered")
-        conn.close()
         return redirect(url_for('login_page'))
     return render_template('register.html')
 
@@ -246,12 +242,14 @@ def submit_report_api():
         return jsonify({'error': 'city, report_type, description required'}), 400
 
     user_id = session.get('user_id')
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("INSERT INTO reports (user_id, city, report_type, description) VALUES (?,?,?,?)",
-              (user_id, city, report_type, description))
-    conn.commit()
-    conn.close()
+    reports_collection.insert_one({
+        "_id": next_id("reports"),
+        "user_id": user_id,
+        "city": city,
+        "report_type": report_type,
+        "description": description,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
     return jsonify({'message': 'Report submitted successfully'})
 
 # -----------------------------
@@ -262,29 +260,30 @@ def admin_page():
     if 'user' not in session or session.get('email') != 'admin@example.com':
         return redirect(url_for('login_page'))
 
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    # Users
-    c.execute("SELECT id, name, email FROM users")
-    users = c.fetchall()
+    users = [
+        (user["_id"], user.get("name"), user.get("email"))
+        for user in users_collection.find(
+            {}, {"name": 1, "email": 1}
+        ).sort("_id", 1)
+    ]
     total_users = len(users)
 
-    # Reports with user names (left join so rows without user_id still appear)
-    c.execute("""
-        SELECT reports.id, COALESCE(users.name, 'Unknown') as user_name, reports.city,
-               reports.report_type, reports.description, reports.timestamp
-        FROM reports
-        LEFT JOIN users ON reports.user_id = users.id
-        ORDER BY reports.timestamp DESC
-    """)
-    reports = c.fetchall()
+    reports = []
+    for report in reports_collection.find().sort("timestamp", DESCENDING):
+        user = users_collection.find_one({"_id": report.get("user_id")}, {"name": 1})
+        reports.append((
+            report["_id"],
+            user.get("name", "Unknown") if user else "Unknown",
+            report.get("city"),
+            report.get("report_type"),
+            report.get("description"),
+            report.get("timestamp"),
+        ))
 
-    # Alerts
-    c.execute("SELECT id, title, message, timestamp FROM alerts ORDER BY id DESC LIMIT 50")
-    alerts = c.fetchall()
-
-    conn.close()
+    alerts = [
+        (alert["_id"], alert.get("title"), alert.get("message"), alert.get("timestamp"))
+        for alert in alerts_collection.find().sort("_id", DESCENDING).limit(50)
+    ]
     return render_template('admin.html', users=users, total_users=total_users, reports=reports, alerts=alerts)
 
 # -----------------------------
@@ -294,33 +293,21 @@ def admin_page():
 def delete_user_api(user_id):
     if 'user' not in session or session.get('email') != 'admin@example.com':
         return jsonify({'error': 'Unauthorized'}), 403
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("DELETE FROM users WHERE id=?", (user_id,))
-    conn.commit()
-    conn.close()
+    users_collection.delete_one({"_id": user_id})
     return jsonify({'message': 'User deleted successfully'})
 
 @app.route('/delete_report/<int:report_id>', methods=['DELETE'])
 def delete_report(report_id):
     if 'user' not in session or session.get('email') != 'admin@example.com':
         return jsonify({'error': 'Unauthorized'}), 403
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("DELETE FROM reports WHERE id=?", (report_id,))
-    conn.commit()
-    conn.close()
+    reports_collection.delete_one({"_id": report_id})
     return jsonify({'message': 'Report deleted successfully'})
 
 @app.route('/delete_alert/<int:alert_id>', methods=['DELETE'])
 def delete_alert(alert_id):
     if 'user' not in session or session.get('email') != 'admin@example.com':
         return jsonify({'error': 'Unauthorized'}), 403
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("DELETE FROM alerts WHERE id=?", (alert_id,))
-    conn.commit()
-    conn.close()
+    alerts_collection.delete_one({"_id": alert_id})
     return jsonify({'message': 'Alert deleted successfully'})
 
 # -----------------------------
@@ -335,21 +322,26 @@ def create_alert():
     message = (data.get("message") or "").strip()
     if not title or not message:
         return jsonify({"error": "title and message required"}), 400
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("INSERT INTO alerts (title, message) VALUES (?, ?)", (title, message))
-    conn.commit()
-    conn.close()
+    alerts_collection.insert_one({
+        "_id": next_id("alerts"),
+        "title": title,
+        "message": message,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
     return jsonify({"message": "Alert created successfully!"})
 
 @app.route("/user_alerts", methods=["GET"])
 def user_alerts():
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("SELECT title, message, timestamp FROM alerts ORDER BY id DESC LIMIT 10")
-    rows = c.fetchall()
-    conn.close()
-    alerts = [{"title": r[0], "message": r[1], "timestamp": r[2]} for r in rows]
+    alerts = [
+        {
+            "title": alert.get("title"),
+            "message": alert.get("message"),
+            "timestamp": alert.get("timestamp"),
+        }
+        for alert in alerts_collection.find(
+            {}, {"title": 1, "message": 1, "timestamp": 1}
+        ).sort("_id", DESCENDING).limit(10)
+    ]
     return jsonify(alerts)
 
 # -----------------------------
