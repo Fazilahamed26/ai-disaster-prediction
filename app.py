@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session
-import joblib, requests, os
+import joblib, requests, os, secrets
 from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
 from datetime import datetime
@@ -11,7 +11,31 @@ from pymongo.errors import DuplicateKeyError
 # -----------------------------
 app = Flask(__name__)
 load_dotenv()
-app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
+APP_ENV = os.getenv("APP_ENV", "development").lower()
+IS_PRODUCTION = APP_ENV == "production"
+SECRET_KEY = os.getenv("SECRET_KEY")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
+
+if APP_ENV not in {"development", "production"}:
+    raise RuntimeError("APP_ENV must be either 'development' or 'production'")
+if IS_PRODUCTION:
+    missing_settings = [
+        setting
+        for setting, value in (
+            ("SECRET_KEY", SECRET_KEY),
+            ("ADMIN_PASSWORD", ADMIN_PASSWORD),
+            ("OPENWEATHER_API_KEY", OPENWEATHER_API_KEY),
+        )
+        if not value
+    ]
+    if missing_settings:
+        raise RuntimeError(
+            "Required production settings are missing: "
+            + ", ".join(missing_settings)
+        )
+
+app.secret_key = SECRET_KEY or secrets.token_hex(32)
 bcrypt = Bcrypt(app)
 MONGODB_URI = os.getenv("MONGODB_URI")
 if not MONGODB_URI:
@@ -22,7 +46,7 @@ users_collection = db["users"]
 reports_collection = db["reports"]
 alerts_collection = db["alerts"]
 counters_collection = db["counters"]
-API_KEY = os.getenv("OPENWEATHER_API_KEY", "demo_api_key")  # fallback
+API_KEY = OPENWEATHER_API_KEY or "demo_api_key"
 
 # -----------------------------
 # Database Initialization
@@ -59,15 +83,35 @@ def next_id(collection_name):
     return counter["sequence"]
 
 def create_admin_if_not_exists():
-    if not users_collection.find_one({"email": "admin@example.com"}):
-        password_hash = bcrypt.generate_password_hash("admin123").decode("utf-8")
-        users_collection.insert_one({
-            "_id": next_id("users"),
-            "name": "admin",
-            "email": "admin@example.com",
-            "password": password_hash,
-        })
-        print("✅ Admin account created: admin@example.com / admin123")
+    admin = users_collection.find_one({"email": "admin@example.com"})
+    if admin:
+        if ADMIN_PASSWORD:
+            current_password = admin.get("password")
+            if not current_password or not bcrypt.check_password_hash(
+                current_password, ADMIN_PASSWORD
+            ):
+                password_hash = bcrypt.generate_password_hash(
+                    ADMIN_PASSWORD
+                ).decode("utf-8")
+                users_collection.update_one(
+                    {"_id": admin["_id"]},
+                    {"$set": {"password": password_hash}},
+                )
+        return
+
+    if not ADMIN_PASSWORD:
+        raise RuntimeError(
+            "Set ADMIN_PASSWORD before creating the admin account"
+        )
+
+    password_hash = bcrypt.generate_password_hash(ADMIN_PASSWORD).decode("utf-8")
+    users_collection.insert_one({
+        "_id": next_id("users"),
+        "name": "admin",
+        "email": "admin@example.com",
+        "password": password_hash,
+    })
+    print("Admin account created: admin@example.com")
 
 init_db()
 
@@ -348,4 +392,4 @@ def user_alerts():
 # Run App
 # -----------------------------
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=not IS_PRODUCTION)
